@@ -1,0 +1,404 @@
+
+# Data extraction
+```{r}
+braga <- read.csv(file = "otherswhole_brajhka.csv")
+```
+
+```{r}
+library(dplyr)
+braga_clean <- braga[!braga$ASV %in% c("ASV_0059","ASV_0065","ASV_0071","ASV_0160","ASV_0164","ASV_0143",
+                        "ASV_0063","ASV_0076","ASV_0127","ASV_0102","ASV_0112","ASV_0136",
+                        "ASV_0155","ASV_0167","ASV_0072","ASV_0027","ASV_0027","ASV_0120",
+                        "ASV_0173","ASV_0131","ASV_0157","ASV_0142","ASV_0110"),]
+braga_bac <- braga_clean[braga_clean$Kingdom == "Fungi",]
+#braga_bac <- braga_clean[braga_clean$Kingdom == "Bacteria",]
+unique(braga_bac$Species)
+colSums(braga_bac!=0)
+
+#braga_bac <- braga_clean
+braga_bac_names <- braga_bac[,grepl("ASV|16S|Genus|Species",colnames(braga_bac))]
+colnames(braga_bac)
+(17+27+19+16)/4
+
+rownames(braga_bac_names) <- paste(braga_bac_names$ASV, braga_bac_names$Genus,braga_bac_names$Species)
+
+braga_bac_names <- select(braga_bac_names, -ASV, -Genus, -Species)
+
+mean(colSums(braga_bac_names))
+```
+
+```{r}
+df_meta <- data.frame(colnames(braga_bac_names),c(rep("ANA",4),rep("NCh",4)))
+colnames(df_meta) <- c("SampleID","type")
+```
+
+
+# Beta-diversity
+```{r}
+library(stringr)
+library(ggplot2)
+# beta
+braga_bac_names_clr <- microbiome::transform(braga_bac_names, "clr")
+dist_matrix <- dist(t(braga_bac_names_clr), method = "euclidean")
+pcoa_result <- cmdscale(dist_matrix, k = 2, eig = TRUE)
+?dist
+
+eig_vals <- pcoa_result$eig[pcoa_result$eig > 0]
+var_explained <- eig_vals / sum(eig_vals) * 100
+
+df_plot <- as.data.frame(pcoa_result$points)
+colnames(df_plot) <- c("PCoA1", "PCoA2")
+df_plot$SampleID <- rownames(df_plot)
+
+df_plot <- merge(df_plot, df_meta, by = "SampleID")
+df_plot$type <- str_replace_all(df_plot$type, c("ANA" = "HA", "NCh" = "HU"))
+
+
+ord_plot <- ggplot(df_plot, aes(x = PCoA1, y = PCoA2, color = type)) +
+  geom_point(size = 4) +
+  labs(
+  x = paste0("PCoA1 (", round(var_explained[1], 1), "%)"),
+  y = paste0("PCoA2 (", round(var_explained[2], 1), "%)")) + 
+  scale_color_manual(values = col_br) +
+  theme(axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_rect(fill = "#EFEFEf", color = "#EFEFEf"),
+        strip.text = element_text(size = 13,color="#434343"),
+        panel.border = element_rect(color = "gray", fill = NA, linewidth = 1))
+
+ord_plot
+
+ggsave(filename="ord_plot_fun_2.svg", plot=ord_plot,width = 14, height = 7, dpi=600,units = "cm")
+```
+
+```{r}
+?betadisper
+?cmdscale
+?adonis2
+#Count the homogeneous of variances (pv > 0.05 needed) 
+beta <- betadisper(dist_matrix, df_meta$type) #Change the argument
+betn <- permutest(beta)
+betn
+
+#Count permanova (pv < 0.01 needed)
+permanova <- adonis2(dist_matrix ~ type, data = df_meta) #Change the argument
+permanova
+```
+
+
+# Alpha diversity
+```{r}
+library(vegan)
+simp <- vegan::diversity(t(braga_bac_names), index = "simpson")
+shan <- vegan::diversity(t(braga_bac_names), index = "shannon")
+ob_ch <- estimateR(t(braga_bac_names))["S.chao1", ]
+?estimateR
+
+colSums(braga_bac_names!=0)
+
+all_adiv <- data.frame(colnames(braga_bac_names),simp,shan,ob_ch)
+```
+
+```{r}
+options(scipen = 0)
+long_br <- reshape2::melt(all_adiv)
+long_br <- merge(long_br,df_meta, by.x ="colnames.braga_bac_names.", by.y="SampleID")
+long_br$type <- str_replace_all(long_br$type, c("ANA" = "HA", "NCh" = "HU"))
+long_br$variable <- str_replace_all(long_br$variable, c("simp" = "Simpson", "shan" = "Shannon", "ob_ch" = "Chao1"))
+
+plot3 <- ggplot(long_br, aes(x = type, y = value, colour = type)) + 
+  geom_boxplot(outlier.shape = NA, alpha = 0.5) +
+  geom_jitter(width = 0.2) +
+  stat_compare_means(method = "t.test",
+                     label = "p") +
+  facet_wrap(. ~ variable, scales = "free") +
+  scale_fill_manual(values = col_br) +
+  scale_color_manual(values = col_br) +
+  ylab("Value")+
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.grid = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(fill = "#EFEFEf", color = "#EFEFEf"),
+        strip.text = element_text(size = 14,color="#434343"),
+        panel.border = element_rect(color = "gray", fill = NA, linewidth = 1),
+        axis.ticks.y = element_line(color = "gray", linewidth = 1)
+        )
+
+plot3
+ggsave(filename="adiv_fun_2.svg", plot=plot3,width = 16, height = 10, dpi=600,units = "cm")
+
+```
+
+
+# Pheatmap for fungi/bacteria
+
+sequence of genuses for plots
+```{r}
+row_order_bac <- c("Lactobacillus", "Lentilactobacillus", "Acetobacter", "Lactococcus","Streptococcus",
+                   "Acinetobacter","Leuconostoc","Macrococcus",
+                   "Polynucleobacter","Rhodanobacter","Legionella","Other Bacteria")
+
+braga_gen_clr
+
+row_order_fun <- c("Monosporozyma", "Trichosporon", "Aureobasidium", "Kluyveromyces",
+                   "Saccharomyces","Malassezia","Metschnikowia",
+                   "Mucor","Yarrowia","Kurtzmaniella","Brettanomyces",
+                   "Clavispora","Rhodotorula","Dekkera","Other Fungi")
+```
+
+Plot Bacteria genuses pheatmap
+```{r}
+library(gridExtra)
+library(pheatmap)
+braga_gen <- braga_bac[,grepl("16S|Genus",colnames(braga_bac))]
+
+df_sum <- braga_gen %>%
+  group_by(Genus) %>%
+  summarise(across(starts_with("Zorigto."), sum), .groups = "drop")
+df_sum[is.na(df_sum$Genus),]$Genus<- "Other Fungi"
+df_sum <- data.frame(df_sum)
+
+rownames(df_sum) <- df_sum$Genus
+df_sum <- select(df_sum,-Genus)
+
+braga_gen_clr <- data.frame(microbiome::transform(df_sum, "log"))
+braga_gen_clr <- braga_gen_clr[row_order_bac, ]
+
+newnames <- lapply(
+  rownames(braga_gen_clr),
+  function(x) bquote(italic(.(x))))
+
+colorpal2 <- c("#FF4D00","#FFAA00","#FFEA00","#FEF8EC","#7FCFDE","#00A5CF")
+
+
+p <- pheatmap(braga_gen_clr, border_color = FALSE,
+               color = colorRampPalette(rev(colorpal2))(150),
+               cluster_rows=F, cluster_cols=F,
+               show_colnames = F, show_rownames = T,
+              labels_row = as.expression(newnames),
+              fontsize=6,
+              cellwidth = 12,
+              cellheight=12,
+              angle_col=315,
+              gaps_col=4,
+              gaps_row=c(3,8,11))[[4]]
+
+my_plot <- grid.arrange(p, nrow=1, ncol=1)
+ggsave(filename="bacteria_logrel_others_2.svg", plot=my_plot)
+```
+
+Plot Fungal genuses pheatmap
+```{r}
+braga_gen <- braga_bac[,grepl("16S|Genus",colnames(braga_bac))]
+
+braga_gen$Genus <- gsub("Botryosphaeria","Other Fungi",braga_gen$Genus) 
+braga_gen$Genus <- gsub("Kazachstania","Monosporozyma",braga_gen$Genus) 
+
+df_sum <- braga_gen %>%
+  group_by(Genus) %>%
+  summarise(across(starts_with("Zorigto."), sum), .groups = "drop")
+df_sum[is.na(df_sum$Genus),]$Genus<- "Other bacteria"
+df_sum <- data.frame(df_sum)
+
+rownames(df_sum) <- df_sum$Genus
+df_sum <- select(df_sum,-Genus)
+
+braga_gen_clr <- data.frame(microbiome::transform(df_sum, "log"))
+braga_gen_clr <- braga_gen_clr[row_order_fun, ]
+
+newnames <- lapply(
+  rownames(braga_gen_clr),
+  function(x) bquote(italic(.(x))))
+
+colorpal2 <- c("#FF4D00","#FFAA00","#FFEA00","#FEF8EC","#7FCFDE","#00A5CF")
+
+
+p <- pheatmap(braga_gen_clr, border_color = FALSE,
+               color = colorRampPalette(rev(colorpal2))(150),
+               cluster_rows=F, cluster_cols=F,
+               show_colnames = F, show_rownames = T,
+              labels_row = as.expression(newnames),
+              cellwidth = 16,
+              fontsize=8,
+              cellheight=12,
+              angle_col=315,
+              gaps_col=4,
+              gaps_row=c(4,7,13,14))[[4]]
+
+my_plot <- grid.arrange(p, nrow=1, ncol=1)
+ggsave(filename="fungi_clr_others_2.svg", plot=my_plot)
+```
+
+```{r}
+col_br <- c("#024E74","#D80000")
+
+```
+
+```{r}
+p <- pheatmap(braga_gen_clr, border_color = FALSE,
+               color = colorRampPalette(rev(colorpal2))(150),
+               cluster_rows=T, cluster_cols=F,
+               show_colnames = F, show_rownames = T,
+              labels_row = as.expression(newnames),
+              cellwidth = 16,
+              cellheight=12,
+              angle_col=315,
+              gaps_col=4,
+              gaps_row=c(3,8,11))[[4]]
+```
+
+
+# Ratio of bacterial and fungi species
+```{r}
+rel_abund <- data.frame(
+  CFU = c(2.7*10^8, 1.2*10^6, 8.2*10^7,4.2*10^5),
+  type = c("HU","HU","HA","HA"),
+  organism = c("Bacteria","Fungi","Bacteria","Fungi")
+)
+rel_abund_whole <- read.csv("спг_п.csv")
+```
+
+```{r}
+col2 <- c("#024E74","#D80000")
+boxp <- ggplot(rel_abund_whole, aes(x = Hurange, y = For_plot, colour = Hurange)) + 
+  geom_boxplot(outlier.shape = NA, alpha = 0.5) +
+  geom_jitter(width = 0.2) +
+  stat_compare_means(method = "wilcox",
+                     label = "p.signif", 
+                     hide.ns = TRUE) +
+  facet_wrap(. ~ Kingdom, scales = "free") +
+  scale_fill_manual(values = col2) +
+  scale_color_manual(values = col2) +
+  scale_y_log10(limits = c(1*10^5, 1*10^9),labels = scales::scientific)+
+  ylab("CFU/g")+
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.grid = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(fill = "#EFEFEf", color = "#EFEFEf"),
+        strip.text = element_text(size = 13,color="#434343"),
+        panel.border = element_rect(color = "gray", fill = NA, linewidth = 1),
+        axis.ticks.y = element_line(color = "gray", linewidth = 1))
+
+ggsave(filename="boxp_fungi_bac_2.svg", plot=boxp,width = 22, height = 7, dpi=600,units = "cm")
+```
+
+
+```{r}
+col_br <- c("#FFB700","#00A5CF")
+
+rel_fungi_bac <- rel_abund %>%
+  mutate(organism = fct_relevel(organism, 
+            "Fungi", "Bacteria")) %>%
+  ggplot(aes(x = type, y = CFU)) +
+  geom_bar(aes(fill = organism), stat = "identity", position = "fill") +
+  scale_fill_manual(values = col_br)+
+  scale_x_discrete(guide = guide_axis(angle = 0)) + 
+  ylab("CFU/g") +
+  theme(axis.title.x=element_blank(),
+        strip.background = element_rect(fill = "gray90", color = NA),
+        panel.grid = element_blank(),
+        legend.position = "bottom", 
+        strip.text.y = element_text(angle = 0),
+        panel.border = element_blank()) + coord_flip()
+rel_fungi_bac
+
+ggsave(filename="rel_fungi_bac.svg", plot=rel_fungi_bac,width = 20, height = 4, dpi=600,units = "cm")
+```
+
+
+
+# Map
+```{r}
+library(dplyr)
+library(maps)
+library(ggplot2)
+library(rnaturalearth)
+library(sf)
+
+world_map <- map_data("world")
+
+unique(world_map$region)
+
+world_mapwork <- world_map[world_map$region %in% c("Mongolia","Russia","Kazakhstan","China"),]
+
+
+lakes_sf <- ne_download(scale = "large", type = "lakes",
+                        category = "physical", returnclass = "sf")
+baikal_sf <- lakes_sf %>%
+  filter(grepl("baikal", name_en, ignore.case = TRUE) |
+         grepl("baikal|baykal", name, ignore.case = TRUE))
+lakes  <- map_data("lakes")  
+baikal <- lakes %>% filter(grepl("baikal", region, ignore.case = TRUE))
+```
+
+```{r}
+p <- ggplot() + coord_fixed() +
+  xlab("") + ylab("")
+
+#Add map to base plot
+base_world_messy <- p + 
+  geom_polygon(data=world_mapwork, aes(x=long, y=lat, group=group,), 
+                               colour="#4BAFDA", fill="#AFDFEF",size = 0.3) +
+  coord_fixed(1.3) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        panel.background = element_rect(fill = 'white', colour = 'white'), 
+        axis.line = element_line(colour = "white"), legend.position="none",
+        axis.ticks=element_blank(), axis.text.x=element_blank(),
+        axis.text.y=element_blank())
+
+
+base_world_messy
+```
+
+```{r}
+points_map <- read.csv("Hurange_points.csv")
+```
+
+
+```{r}
+map_data <- 
+  base_world_messy +
+  geom_point(data=points_map, 
+             aes(x=Longitude, y=Latitude), colour="Deep Pink", 
+             fill="Pink",pch=21, size=1, alpha=I(0.7))
+
+map_data
+
+ggsave("caucasus.svg", map_data, width = 17, height = 17, dpi=500, units = "cm")
+```
+
+
+# Rarefication curve 
+
+```{r}
+braga_bac_names
+colnames(braga_bac_names) <- gsub("NCh","HU",colnames(braga_bac_names))
+colnames(braga_bac_names) <- gsub("ANA","HA",colnames(braga_bac_names))
+colnames(braga_bac_names) <- gsub("Zorigto.","",colnames(braga_bac_names))
+asv_t <- t(braga_bac_names)
+
+# rarefaction curves
+rarecurve(asv_t, step = 100, sample = min(rowSums(asv_t)), 
+          col = "blue", cex = 0.6, label = TRUE)
+
+```
+
+
+```{r}
+braga_bac_names
+colnames(braga_bac_names) <- gsub("NCh","HU",colnames(braga_bac_names))
+colnames(braga_bac_names) <- gsub("ANA","HA",colnames(braga_bac_names))
+colnames(braga_bac_names) <- gsub("Zorigto.16S.","ITS.",colnames(braga_bac_names))
+asv_t <- t(braga_bac_names)
+
+# rarefaction curves
+rarecurve(asv_t, step = 100, sample = min(rowSums(asv_t)), 
+          col = "blue", cex = 0.6, label = TRUE)
+```
+

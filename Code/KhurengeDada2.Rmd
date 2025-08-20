@@ -1,0 +1,291 @@
+
+```{r}
+theme_set(theme_bw())
+```
+
+
+# 16S
+
+##Processing of raw reeds
+```{r}
+#Write the path to the directory
+path <- "16Spath/" 
+list.files(path)
+```
+
+```{r}
+#Take filenames
+fnFs <- sort(list.files(path, pattern="R1.fastq", full.names = TRUE)) 
+fnRs <- sort(list.files(path, pattern="R2.fastq", full.names = TRUE))
+
+sample.names <- sapply(strsplit(basename(fnFs), "__"), `[`, 1)
+
+#Plot sequence quality
+plotQualityProfile(fnFs[1:10])  
+plotQualityProfile(fnRs[1:10])
+
+#ggsave("quality_f_final.pdf", quality_f, width = 50, height = 50,limitsize = FALSE)
+#ggsave("quality_r_final.pdf", quality_r, width = 50, height = 50,limitsize = FALSE)
+
+```
+
+```{r}
+#Make files for forward filtering
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fq.gz"))
+
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+
+#Filter and trim reads
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, maxN=0, truncLen=130 , compress=TRUE, multithread=TRUE)
+
+?filterAndTrim
+#Print the results
+out
+
+#Plot sequence quality
+quality_f2 <- plotQualityProfile(filtFs[1:290])  
+quality_r2 <- plotQualityProfile(filtRs[1:290])
+
+# ggsave("quality_f_cleanfinal.pdf", quality_f2, width = 50, height = 50,limitsize = FALSE)
+# ggsave("quality_r_cleanfinal.pdf", quality_r2, width = 50, height = 50,limitsize = FALSE)
+```
+
+```{r}
+#Learn errors of sequensing 
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+
+# #plot error profile
+plotErrors(errF, nominalQ=TRUE)
+plotErrors(errR, nominalQ=TRUE)
+# 
+#dereplication (analogue of unique.seqs in mothur)
+
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+ 
+#name the derep-class objects by the sample names
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE)
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+
+```
+
+
+```{r}
+#Merge files by the id?
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE, minOverlap=9)
+
+#Construct sequence table
+seqtab <- makeSequenceTable(mergers)
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+
+#Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+#Account for the abundances of those variants
+sum(seqtab.nochim)/sum(seqtab)
+
+#Track reads through the pipeline
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+#Columns for tracking
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+```
+
+
+```{r}
+#Save csv and RDS
+write.csv(seqtab.nochim,"seqtab.nochim.csv", row.names = FALSE)
+
+saveRDS(seqtab.nochim, "seqtab.rds") 
+seqtab.nochim <- readRDS("seqtab.rds")
+```
+
+##Taxa assign
+```{r}
+#Taxa assign
+taxa <- assignTaxonomy(seqtab.nochim, "pathtodb/database/silva_nr99_v138.1_train_set.fa.gz", multithread=TRUE)
+taxa <- addSpecies(taxa, "pathtodb/database/silva_species_assignment_v138.1.fa.gz")
+
+#Removing sequence rownames for display only
+taxa.print <- taxa
+rownames(taxa.print) <- NULL
+#Print head of assigned taxa
+head(taxa.print)
+```
+
+
+#phyloseq
+
+```{r}
+#Making first phyloseq object
+ps.Silva <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE),
+                     tax_table(taxa))
+
+#Take DNA from first phyloseq object
+dna <- Biostrings::DNAStringSet(taxa_names(ps.Silva))
+names(dna) <- taxa_names(ps.Silva)
+
+#Add dna to phyloseq
+ps.Silva <- merge_phyloseq(ps.Silva, dna)
+taxa_names(ps.Silva) <- sprintf("ASV_%04d", seq(ntaxa(ps.Silva)))
+
+#Making phyloseq
+ps.Silva <- phyloseq(otu, tax, seq)
+ps.Silva <- ps.Silva %>% subset_taxa(Family!= "Mitochondria" | is.na(Family) & Class!="Chloroplast" | is.na(Class) & Order!="Chloroplast" | is.na(Order))
+
+
+#Saving first phyloseq to RDS with tree and seqs
+saveRDS(ps.Silva, "16S_khurenge.rds")
+```
+
+
+
+# ITS
+##Processing of raw reeds
+```{r}
+#Write the path to the directory
+path <- "ITSpath/" 
+list.files(path)
+```
+
+```{r}
+#Take filenames
+fnFs <- sort(list.files(path, pattern="R1.fastq", full.names = TRUE)) 
+fnRs <- sort(list.files(path, pattern="R2.fastq", full.names = TRUE))
+
+sample.names <- sapply(strsplit(basename(fnFs), "__"), `[`, 1)
+
+#Plot sequence quality
+plotQualityProfile(fnFs[1:10])  
+plotQualityProfile(fnRs[1:10])
+
+#ggsave("quality_f_final.pdf", quality_f, width = 50, height = 50,limitsize = FALSE)
+#ggsave("quality_r_final.pdf", quality_r, width = 50, height = 50,limitsize = FALSE)
+
+```
+
+```{r}
+#Make files for forward filtering
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fq.gz"))
+
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+
+#Filter and trim reads
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, maxN=0, truncLen=130 , compress=TRUE, multithread=TRUE)
+
+?filterAndTrim
+#Print the results
+out
+
+#Plot sequence quality
+quality_f2 <- plotQualityProfile(filtFs[1:290])  
+quality_r2 <- plotQualityProfile(filtRs[1:290])
+
+# ggsave("quality_f_cleanfinal.pdf", quality_f2, width = 50, height = 50,limitsize = FALSE)
+# ggsave("quality_r_cleanfinal.pdf", quality_r2, width = 50, height = 50,limitsize = FALSE)
+```
+
+```{r}
+#Learn errors of sequensing 
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+
+# #plot error profile
+plotErrors(errF, nominalQ=TRUE)
+plotErrors(errR, nominalQ=TRUE)
+# 
+#dereplication (analogue of unique.seqs in mothur)
+
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+ 
+#name the derep-class objects by the sample names
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE)
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+
+```
+
+
+```{r}
+#Merge files by the id?
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE, minOverlap=9)
+
+#Construct sequence table
+seqtab <- makeSequenceTable(mergers)
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+
+#Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+#Account for the abundances of those variants
+sum(seqtab.nochim)/sum(seqtab)
+
+#Track reads through the pipeline
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+#Columns for tracking
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+```
+
+
+```{r}
+#Save csv and RDS
+write.csv(seqtab.nochim,"seqtab.nochim.csv", row.names = FALSE)
+
+saveRDS(seqtab.nochim, "seqtab.rds") 
+seqtab.nochim <- readRDS("seqtab.rds")
+```
+
+##Taxa assign
+```{r}
+#Taxa assign
+taxa <- assignTaxonomy(seqtab.nochim, "pathtodb/database/sh_general_release_dynamic_10.05.2021_dev.fasta", multithread=TRUE)
+
+#Removing sequence rownames for display only
+taxa.print <- taxa
+rownames(taxa.print) <- NULL
+#Print head of assigned taxa
+head(taxa.print)
+```
+
+
+#phyloseq
+
+```{r}
+#Making first phyloseq object
+ps.Silva <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE),
+                     tax_table(taxa))
+
+#Take DNA from first phyloseq object
+dna <- Biostrings::DNAStringSet(taxa_names(ps.Silva))
+names(dna) <- taxa_names(ps.Silva)
+
+#Add dna to phyloseq
+ps.Silva <- merge_phyloseq(ps.Silva, dna)
+taxa_names(ps.Silva) <- sprintf("ASV_%04d", seq(ntaxa(ps.Silva)))
+
+#Making phyloseq
+ps.Silva <- phyloseq(otu, tax, seq)
+ps.Silva <- ps.Silva %>% subset_taxa(Family!= "Mitochondria" | is.na(Family) & Class!="Chloroplast" | is.na(Class) & Order!="Chloroplast" | is.na(Order))
+
+
+#Saving first phyloseq to RDS with tree and seqs
+saveRDS(ps.Silva, "ITS_khurenge.rds")
+```
